@@ -1,8 +1,15 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const session = require('express-session');
 const Event = require("./models/Event");
-const Ticket = require("./models/Ticket"); 
+const Ticket = require("./models/Ticket");
+const Payment = require("./models/Payment");
+const Form = require('./models/Form'); 
+const Response = require('./models/Response');
+const Quantity = require("./models/Quantity");
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 require('dotenv').config();
@@ -27,13 +34,117 @@ app.use(
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+// Session configuration
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000 // 1 day
+  }
+}));
+
+// Initialize Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
+// Passport serialization
+passport.serializeUser((user, done) => {
+  done(null, user);
+});
+
+passport.deserializeUser((user, done) => {
+  done(null, user);
+});
+
+// Google OAuth Strategy
+passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:8080/auth/google/callback'
+  },
+  (accessToken, refreshToken, profile, done) => {
+    const user = {
+      id: profile.id,
+      email: profile.emails[0].value,
+      name: profile.displayName,
+      avatar: profile.photos[0]?.value
+    };
+    console.log('User logged in:', user.email); // Log the user's email
+    return done(null, user);
+  }
+));
+
 // Initialize Razorpay
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
-// Routes
+function ensureAuthenticated(req, res, next) {
+  if (req.isAuthenticated()) {
+    console.log('Authenticated user:', req.user.email); // Log the authenticated user's email
+    return next();
+  }
+  res.status(401).json({ error: 'Unauthorized' });
+}
+
+// Auth Routes
+app.get('/auth/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+app.get('/auth/google/callback', 
+  passport.authenticate('google', { failureRedirect: '/login' }),
+  (req, res) => {
+    console.log('User successfully authenticated:', req.user.email); // Log successful authentication
+    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth-success`);
+  }
+);
+
+// Updated logout route
+app.get('/auth/logout', (req, res) => {
+  if (req.user) {
+    console.log('User logging out:', req.user.email); // Log the user logging out
+  }
+  req.logout((err) => {
+    if (err) {
+      console.error('Logout error:', err);
+      return res.status(500).json({ error: 'Logout failed' });
+    }
+    
+    // Clear the session cookie
+    req.session.destroy((err) => {
+      if (err) {
+        console.error('Session destruction error:', err);
+        return res.status(500).json({ error: 'Session destruction failed' });
+      }
+      
+      // Clear the passport cookie
+      res.clearCookie('connect.sid');
+      
+      // Send success response
+      res.json({ success: true });
+    });
+  });
+});
+
+app.get('/auth/current-user', (req, res) => {
+  if (req.isAuthenticated()) {
+    res.json({
+      isAuthenticated: true,
+      user: req.user
+    });
+  } else {
+    res.json({
+      isAuthenticated: false,
+      user: null
+    });
+  }
+});
+
+// YOUR ORIGINAL ROUTES EXACTLY AS YOU PROVIDED THEM:
 
 // Get all events
 app.get("/api/events", async (req, res) => {
@@ -45,6 +156,52 @@ app.get("/api/events", async (req, res) => {
   }
 });
 
+// Verify if user has already paid for an event
+// Enhanced verification endpoint
+app.post('/api/verify-payment-status', async (req, res) => {
+  try {
+    const { eventId, username } = req.body;
+
+    if (!eventId || !username) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Both eventId and username are required' 
+      });
+    }
+
+    // Find a payment document that contains both the eventId and username
+    const payment = await Payment.findOne({ 
+      eventId: eventId, 
+      username: username 
+    });
+
+    if (!payment) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Payment not found for the given eventId and username combination' 
+      });
+    }
+
+    // If found, return success with payment details
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Payment verified successfully',
+      payment: {
+        eventId: payment.eventId,
+        username: payment.username,
+        amount: payment.amount,
+        payment_id: payment.payment_id
+      }
+    });
+
+  } catch (error) {
+    console.error('Error verifying payment:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error while verifying payment' 
+    });
+  }
+});
 // Get single event by ID
 app.get("/api/event/:id", async (req, res) => {
   try {
@@ -58,22 +215,52 @@ app.get("/api/event/:id", async (req, res) => {
   }
 });
 
-// Create a new event
-app.post("/api/create-event", async (req, res) => {
+// Create a new event (protected)
+// app.post("/api/create-event", ensureAuthenticated, async (req, res) => {
+//   try {
+//     const newEvent = new Event({
+//       ...req.body,
+//       createdBy: req.user.email // Store the authenticated user's email
+//     });
+//     await newEvent.save();
+
+//     console.log('Event created by:', req.user.email); // Log who created the event
+//     console.log(newEvent);
+
+//     res.status(201).json({
+//       message: "Event created successfully!",
+//       event: newEvent,
+//       eventId: newEvent._id,
+//     });
+//   } catch (err) {
+//     res.status(500).json({ error: err.message });
+//   }
+// });
+
+
+app.post("/api/create-event", ensureAuthenticated, async (req, res) => {
   try {
-    const newEvent = new Event(req.body);
-    await newEvent.save();
+    // Log the incoming request body and user for debugging
+    console.log('Creating event with data:', req.body);
+    console.log('Created by user:', req.user.email);
+
+    const newEvent = new Event({
+      ...req.body,
+      createdBy: req.user.email // This will store the authenticated user's email
+    });
+
+    const savedEvent = await newEvent.save();
 
     res.status(201).json({
       message: "Event created successfully!",
-      event: newEvent,
-      eventId: newEvent._id,
+      event: savedEvent,
+      eventId: savedEvent._id,
     });
   } catch (err) {
+    console.error('Error creating event:', err);
     res.status(500).json({ error: err.message });
   }
 });
-
 // Edit/Update an event by ID
 app.put("/api/events/:id", async (req, res) => {
   try {
@@ -109,8 +296,8 @@ app.delete("/api/event/:id", async (req, res) => {
   }
 });
 
-// Create a new ticket for an event
-app.post("/api/tickets", async (req, res) => {
+// Create a new ticket for an event (protected)
+app.post("/api/tickets", ensureAuthenticated, async (req, res) => {
   try {
     const { eventId, ticketName, domains, quantity, description, ticketType } = req.body;
 
@@ -125,10 +312,15 @@ app.post("/api/tickets", async (req, res) => {
       quantity,
       description,
       ticketType,
+      createdBy: req.user.email // Store creator email
     });
 
     await newTicket.save();
-    res.status(201).json({ message: "Ticket created successfully!", ticket: newTicket });
+    console.log('Ticket created by:', req.user.email); // Log who created the ticket
+    res.status(201).json({ 
+      message: "Ticket created successfully!", 
+      ticket: newTicket 
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -221,6 +413,24 @@ app.get("/api/event-with-tickets/:eventId", async (req, res) => {
   }
 });
 
+app.post("/api/quantities", async (req, res) => {
+  try {
+    const { eventId, username, quantity } = req.body;
+    
+    // Validate required fields
+    if (!eventId || !username || quantity === undefined) {
+      return res.status(400).json({ error: 'eventId, username, and quantity are required' });
+    }
+
+    const quantityData = new Quantity({ eventId, username, quantity });
+    const savedQuantity = await quantityData.save();
+    
+    res.status(201).json(savedQuantity);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Payment Routes
 app.post("/api/create-razorpay-order", async (req, res) => {
   try {
@@ -238,9 +448,45 @@ app.post("/api/create-razorpay-order", async (req, res) => {
   }
 });
 
+// app.post("/api/verify-payment", async (req, res) => {
+//   try {
+//     const { razorpay_payment_id, razorpay_order_id, razorpay_signature, eventId, tickets , user, amount } = req.body;
+    
+//     // Verify payment signature
+//     const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
+//     hmac.update(razorpay_order_id + "|" + razorpay_payment_id);
+//     const generated_signature = hmac.digest('hex');
+    
+//     if (generated_signature !== razorpay_signature) {
+//       return res.status(400).json({ success: false, error: 'Payment verification failed' });
+//     }
+
+//     // Update ticket quantities in database
+//     for (const ticket of tickets) {
+//       await Ticket.findByIdAndUpdate(
+//         ticket.ticketId,
+//         { $inc: { sold: ticket.quantity } },
+//         { new: true }
+//       );
+//     }
+
+//     res.json({ 
+//       success: true,
+//       message: 'Payment verified and tickets booked',
+//       paymentId: razorpay_payment_id
+//     });
+//   } catch (error) {
+//     console.error('Payment verification error:', error);
+//     res.status(500).json({ 
+//       success: false,
+//       error: 'Failed to verify payment'
+//     });
+//   }
+// });
+
 app.post("/api/verify-payment", async (req, res) => {
   try {
-    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, eventId, tickets } = req.body;
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, eventId, tickets, user, amount } = req.body;
     
     // Verify payment signature
     const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
@@ -260,16 +506,95 @@ app.post("/api/verify-payment", async (req, res) => {
       );
     }
 
+    // Create payment record
+    const paymentRecord = new Payment({
+      eventId,
+      username: user,
+      amount,
+      payment_id: razorpay_payment_id
+    });
+    await paymentRecord.save();
+
     res.json({ 
       success: true,
       message: 'Payment verified and tickets booked',
-      paymentId: razorpay_payment_id
+      paymentId: razorpay_payment_id,
     });
   } catch (error) {
     console.error('Payment verification error:', error);
     res.status(500).json({ 
       success: false,
       error: 'Failed to verify payment'
+    });
+  }
+});
+
+
+// GET all payments for a specific eventId
+app.get("/api/payments/:eventId", async (req, res) => {
+  try {
+    const eventId = req.params.eventId;
+    
+    // Find all payments with the given eventId
+    const payments = await Payment.find({ eventId: eventId });
+    
+    if (payments.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No payments found for this event'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      count: payments.length,
+      data: payments
+    });
+    
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while retrieving payments'
+    });
+  }
+});
+
+app.put("/api/payments/:paymentId", async (req, res) => {
+  try {
+    const paymentId = req.params.paymentId;
+    const { status } = req.body;
+
+    if (!['verified', 'pending', 'rejected'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status value'
+      });
+    }
+
+    const updatedPayment = await Payment.findOneAndUpdate(
+      { payment_id: paymentId },
+      { status: status },
+      { new: true }
+    );
+
+    if (!updatedPayment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: updatedPayment
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while updating payment status'
     });
   }
 });
@@ -300,248 +625,348 @@ app.post("/api/register-free", async (req, res) => {
   }
 });
 
+// Create a new form for an event
+app.post('/api/events/:eventId/forms', async (req, res) => {
+  try {
+    const { title, description, questions } = req.body;
+    const { eventId } = req.params;
+    
+    const form = new Form({
+      title,
+      description,
+      questions,
+      eventId
+    });
+
+    const savedForm = await form.save();
+    res.status(201).json({
+      success: true,
+      data: savedForm,
+      message: 'Form created successfully'
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: 'Failed to create form',
+      error: error.message
+    });
+  }
+});
+
+// Get all forms for a specific event
+app.get('/api/events/:eventId/forms', async (req, res) => {
+  try {
+    const forms = await Form.find({ eventId: req.params.eventId })
+                          .sort({ createdAt: -1 });
+    res.json({
+      success: true,
+      count: forms.length,
+      data: forms
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch forms',
+      error: error.message
+    });
+  }
+});
+
+// Get details of a specific form
+app.get('/api/forms/:formId', async (req, res) => {
+  try {
+    const form = await Form.findById(req.params.formId)
+                         .populate('eventId', 'name date');
+    
+    if (!form) {
+      return res.status(404).json({
+        success: false,
+        message: 'Form not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: form
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch form',
+      error: error.message
+    });
+  }
+});
+
+// Update a specific form
+app.put('/api/events/:eventId/forms/:formId', async (req, res) => {
+  try {
+    const { eventId, formId } = req.params;
+    const { title, description, questions } = req.body;
+
+    // Verify the form belongs to the specified event
+    const form = await Form.findOne({ _id: formId, eventId });
+    
+    if (!form) {
+      return res.status(404).json({
+        success: false,
+        message: 'Form not found in this event'
+      });
+    }
+
+    // Update the form
+    const updatedForm = await Form.findByIdAndUpdate(
+      formId,
+      { 
+        title, 
+        description, 
+        questions,
+        updatedAt: Date.now() 
+      },
+      { 
+        new: true, 
+        runValidators: true 
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: updatedForm,
+      message: 'Form updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating form:', error);
+    
+    // Handle validation errors specifically
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: Object.values(error.errors).map(err => err.message)
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Server error while updating form',
+      error: error.message
+    });
+  }
+});
+
+// Delete a specific form
+app.delete('/api/forms/:formId', async (req, res) => {
+  try {
+    const deletedForm = await Form.findByIdAndDelete(req.params.formId);
+    
+    if (!deletedForm) {
+      return res.status(404).json({
+        success: false,
+        message: 'Form not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Form deleted successfully'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete form',
+      error: error.message
+    });
+  }
+});
+
+app.post('/api/responses',ensureAuthenticated, async (req, res) => {
+  try {
+    const { formId, eventId, answers } = req.body;
+
+    // Basic validation
+    if (!formId || !eventId || !answers || !Array.isArray(answers)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: formId, eventId, and answers array are required'
+      });
+    }
+
+    // Create a new response document
+    const newResponse = new Response({
+      formId,
+      eventId,
+      submittedBy: req.user?.email , // Using your default value
+      answers,
+      metadata: {
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        deviceType: req.get('User-Agent')?.includes('Mobile') ? 'Mobile' : 'Desktop',
+        // Duration would typically come from the frontend
+        duration: req.body.duration || 0
+      }
+    });
+
+    // Save to database
+    const savedResponse = await newResponse.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Response saved successfully',
+      data: savedResponse
+    });
+
+  } catch (error) {
+    console.error('Error saving response:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to save response',
+      error: error.message
+    });
+  }
+});
+
+// Get all responses for a specific event
+app.get('/api/events/:eventId/responses', async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    
+    // Get responses with form details populated
+    const responses = await Response.find({ eventId })
+      .populate({
+        path: 'formId',
+        select: 'title description'
+      })
+      .sort({ createdAt: -1 });
+
+    if (!responses.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'No responses found for this event'
+      });
+    }
+
+    res.json({
+      success: true,
+      count: responses.length,
+      data: responses
+    });
+
+  } catch (error) {
+    console.error('Error fetching responses:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch responses',
+      error: error.message
+    });
+  }
+});
+
+// Get response statistics for an event
+app.get('/api/events/:eventId/responses/stats', async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    // Validate eventId format
+    if (!mongoose.Types.ObjectId.isValid(eventId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid event ID format'
+      });
+    }
+
+    const objectId = new mongoose.Types.ObjectId(eventId);
+
+    const stats = {
+      totalResponses: await Response.countDocuments({ eventId: objectId }),
+      byDevice: await Response.aggregate([
+        { $match: { eventId: objectId } },
+        { $group: { 
+          _id: "$metadata.deviceType", 
+          count: { $sum: 1 } 
+        }},
+        { $project: {
+          deviceType: "$_id",
+          count: 1,
+          _id: 0
+        }}
+      ]),
+      byDate: await Response.aggregate([
+        { $match: { eventId: objectId } },
+        { $group: { 
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+          count: { $sum: 1 }
+        }},
+        { $sort: { _id: 1 } },
+        { $project: {
+          date: "$_id",
+          count: 1,
+          _id: 0
+        }}
+      ])
+    };
+
+    // Handle empty results
+    if (stats.totalResponses === 0) {
+      return res.json({
+        success: true,
+        message: 'No responses found for this event',
+        data: {
+          totalResponses: 0,
+          byDevice: [],
+          byDate: []
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: stats
+    });
+
+  } catch (error) {
+    console.error('Error fetching response stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch response statistics',
+      error: error.message
+    });
+  }
+});
+
+app.post("/api/check-submission", async (req, res) => {
+  try {
+    const { eventId, username } = req.body;
+
+    // Validate required parameters
+    if (!eventId || !username) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both eventId and username are required parameters'
+      });
+    }
+
+    // Check if the submission exists
+    const submission = await Response.findOne({
+      eventId: eventId,
+      submittedBy: username
+    });
+
+    res.status(200).json({
+      success: true,
+      exists: !!submission,
+      submission: submission || null
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error while checking submission',
+      error: error.message
+    });
+  }
+});
+
 // Start the server
 app.listen(PORT, () =>
   console.log(`Server running on http://localhost:${PORT}`)
 );
-
-
-// const express = require("express");
-// const mongoose = require("mongoose");
-// const cors = require("cors");
-// const passport = require("passport");
-// const GoogleStrategy = require("passport-google-oauth20").Strategy;
-// const session = require("express-session");
-// const crypto = require("crypto");
-// const Event = require("./models/Event");
-// const Ticket = require("./models/Ticket"); 
-// const Razorpay = require('razorpay');
-// require('dotenv').config();
-
-// const app = express();
-// const PORT = 8080;
-
-// // Connect to MongoDB
-// mongoose
-//   .connect("mongodb://127.0.0.1:27017/Hackly")
-//   .then(() => console.log("MongoDB Connected"))
-//   .catch((err) => console.error("MongoDB Connection Error:", err));
-
-// // Middleware
-// app.use(
-//   cors({
-//     origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-//     credentials: true
-//   })
-// );
-
-// app.use(express.urlencoded({ extended: true }));
-// app.use(express.json());
-
-// // Session configuration
-// app.use(session({
-//   secret: process.env.SESSION_SECRET || 'your-secret-key',
-//   resave: false,
-//   saveUninitialized: true,
-//   cookie: { secure: process.env.NODE_ENV === 'production' }
-// }));
-
-// // Initialize Passport
-// app.use(passport.initialize());
-// app.use(passport.session());
-
-// // Google Strategy Configuration
-// passport.use(new GoogleStrategy({
-//     clientID: process.env.GOOGLE_CLIENT_ID,
-//     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-//     callbackURL: '/auth/google/callback'
-//   },
-//   (accessToken, refreshToken, profile, done) => {
-//     return done(null, profile);
-//   }
-// ));
-
-// // Serialize just the ID to session
-// passport.serializeUser((user, done) => {
-//   done(null, user.id);
-// });
-
-// // Deserialize - we won't actually fetch user data since we're only storing ID
-// passport.deserializeUser((id, done) => {
-//   done(null, { id });
-// });
-
-// // Initialize Razorpay
-// const razorpay = new Razorpay({
-//   key_id: process.env.RAZORPAY_KEY_ID,
-//   key_secret: process.env.RAZORPAY_KEY_SECRET
-// });
-
-// // ======================
-// // Authentication Routes
-// // ======================
-// app.get('/auth/google',
-//   passport.authenticate('google', { scope: ['profile', 'email'] })
-// );
-
-// app.get('/auth/google/callback', 
-//   passport.authenticate('google', { 
-//     failureRedirect: `${process.env.FRONTEND_URL}/login`,
-//     session: true
-//   }),
-//   (req, res) => {
-//     res.redirect(`${process.env.FRONTEND_URL}/auth-success`);
-//   }
-// );
-
-// app.get('/api/current-user', (req, res) => {
-//   if (req.isAuthenticated()) {
-//     res.json({ id: req.user.id });
-//   } else {
-//     res.status(401).json({ error: 'Not authenticated' });
-//   }
-// });
-
-// app.get('/logout', (req, res) => {
-//   req.logout();
-//   res.redirect(process.env.FRONTEND_URL);
-// });
-
-// // ======================
-// // Middleware
-// // ======================
-// const ensureAuthenticated = (req, res, next) => {
-//   if (req.isAuthenticated()) return next();
-//   res.status(401).json({ error: 'Authentication required' });
-// };
-
-// const ensureEventOwner = async (req, res, next) => {
-//   try {
-//     const event = await Event.findById(req.params.id);
-//     if (!event) return res.status(404).json({ error: 'Event not found' });
-//     if (event.createdBy !== req.user.id) {
-//       return res.status(403).json({ error: 'Not authorized' });
-//     }
-//     next();
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// };
-
-// // ======================
-// // Event Routes (Updated)
-// // ======================
-// app.post("/api/create-event", ensureAuthenticated, async (req, res) => {
-//   try {
-//     const newEvent = new Event({
-//       ...req.body,
-//       createdBy: req.user.id // Only storing Google ID
-//     });
-    
-//     await newEvent.save();
-//     res.status(201).json(newEvent);
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-// app.put("/api/events/:id", ensureAuthenticated, ensureEventOwner, async (req, res) => {
-//   try {
-//     const updatedEvent = await Event.findByIdAndUpdate(
-//       req.params.id,
-//       req.body,
-//       { new: true }
-//     );
-//     res.json(updatedEvent);
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-// app.delete("/api/event/:id", ensureAuthenticated, ensureEventOwner, async (req, res) => {
-//   try {
-//     await Ticket.deleteMany({ eventId: req.params.id });
-//     await Event.findByIdAndDelete(req.params.id);
-//     res.json({ success: true });
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-// // ======================
-// // Existing Routes (Keep all your other routes as-is)
-// // ======================
-// // ... [Keep all your existing ticket and payment routes unchanged]
-
-// // ==============================================
-// // Ticket Routes
-// // ==============================================
-// app.get("/api/events/:eventId/tickets", async (req, res) => {
-//   try {
-//     const tickets = await Ticket.find({ eventId: req.params.eventId });
-//     res.json(tickets);
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-// app.post("/api/events/:eventId/tickets", ensureAuthenticated, ensureEventOwner, async (req, res) => {
-//   try {
-//     const newTicket = new Ticket({
-//       ...req.body,
-//       eventId: req.params.eventId
-//     });
-//     await newTicket.save();
-//     res.status(201).json(newTicket);
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-// // ==============================================
-// // Payment Routes
-// // ==============================================
-// app.post("/api/payments/create-order", async (req, res) => {
-//   try {
-//     const order = await razorpay.orders.create({
-//       amount: req.body.amount * 100, // Convert to paise
-//       currency: req.body.currency || 'INR',
-//       receipt: `order_${Date.now()}`
-//     });
-//     res.json(order);
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-// app.post("/api/payments/verify", async (req, res) => {
-//   try {
-//     const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
-    
-//     const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
-//     hmac.update(`${razorpay_order_id}|${razorpay_payment_id}`);
-//     const generatedSignature = hmac.digest('hex');
-    
-//     if (generatedSignature !== razorpay_signature) {
-//       return res.status(400).json({ error: 'Invalid signature' });
-//     }
-
-//     // Update ticket quantities here if needed
-//     res.json({ success: true });
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-// // ==============================================
-// // Error Handling
-// // ==============================================
-// app.use((err, req, res, next) => {
-//   console.error(err.stack);
-//   res.status(500).json({ error: 'Something broke!' });
-// });
-
-// // Start the server
-// app.listen(PORT, () =>
-//   console.log(`Server running on http://localhost:${PORT}`)
-// );

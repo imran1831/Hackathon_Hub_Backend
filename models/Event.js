@@ -13,7 +13,7 @@ const eventSchema = new mongoose.Schema({
   maxTeamSize: { type: Number, min: 1 },
   minTeamSize: { type: Number, min: 1 },
   status: { type: String, enum: ["upcoming", "ongoing", "completed"], default: "upcoming" },
-  createdBy: { type: String }, // Just store Google ID as string
+  createdBy: { type: String }, 
   customSections: [
     {
       header: String,
