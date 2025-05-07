@@ -10,6 +10,7 @@ const Payment = require("./models/Payment");
 const Form = require('./models/Form'); 
 const Response = require('./models/Response');
 const Quantity = require("./models/Quantity");
+const Booking = require("./models/Booking");
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 require('dotenv').config();
@@ -71,7 +72,6 @@ passport.use(new GoogleStrategy({
       name: profile.displayName,
       avatar: profile.photos[0]?.value
     };
-    console.log('User logged in:', user.email); // Log the user's email
     return done(null, user);
   }
 ));
@@ -84,7 +84,6 @@ const razorpay = new Razorpay({
 
 function ensureAuthenticated(req, res, next) {
   if (req.isAuthenticated()) {
-    console.log('Authenticated user:', req.user.email); // Log the authenticated user's email
     return next();
   }
   res.status(401).json({ error: 'Unauthorized' });
@@ -98,7 +97,6 @@ app.get('/auth/google',
 app.get('/auth/google/callback', 
   passport.authenticate('google', { failureRedirect: '/login' }),
   (req, res) => {
-    console.log('User successfully authenticated:', req.user.email); // Log successful authentication
     res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth-success`);
   }
 );
@@ -106,7 +104,6 @@ app.get('/auth/google/callback',
 // Updated logout route
 app.get('/auth/logout', (req, res) => {
   if (req.user) {
-    console.log('User logging out:', req.user.email); // Log the user logging out
   }
   req.logout((err) => {
     if (err) {
@@ -144,7 +141,6 @@ app.get('/auth/current-user', (req, res) => {
   }
 });
 
-// YOUR ORIGINAL ROUTES EXACTLY AS YOU PROVIDED THEM:
 
 // Get all events
 app.get("/api/events", async (req, res) => {
@@ -214,28 +210,6 @@ app.get("/api/event/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// Create a new event (protected)
-// app.post("/api/create-event", ensureAuthenticated, async (req, res) => {
-//   try {
-//     const newEvent = new Event({
-//       ...req.body,
-//       createdBy: req.user.email // Store the authenticated user's email
-//     });
-//     await newEvent.save();
-
-//     console.log('Event created by:', req.user.email); // Log who created the event
-//     console.log(newEvent);
-
-//     res.status(201).json({
-//       message: "Event created successfully!",
-//       event: newEvent,
-//       eventId: newEvent._id,
-//     });
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// });
 
 
 app.post("/api/create-event", ensureAuthenticated, async (req, res) => {
@@ -448,9 +422,10 @@ app.post("/api/create-razorpay-order", async (req, res) => {
   }
 });
 
+
 // app.post("/api/verify-payment", async (req, res) => {
 //   try {
-//     const { razorpay_payment_id, razorpay_order_id, razorpay_signature, eventId, tickets , user, amount } = req.body;
+//     const { razorpay_payment_id, razorpay_order_id, razorpay_signature, eventId, tickets, user, amount } = req.body;
     
 //     // Verify payment signature
 //     const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
@@ -470,10 +445,19 @@ app.post("/api/create-razorpay-order", async (req, res) => {
 //       );
 //     }
 
+//     // Create payment record
+//     const paymentRecord = new Payment({
+//       eventId,
+//       username: user,
+//       amount,
+//       payment_id: razorpay_payment_id
+//     });
+//     await paymentRecord.save();
+
 //     res.json({ 
 //       success: true,
 //       message: 'Payment verified and tickets booked',
-//       paymentId: razorpay_payment_id
+//       paymentId: razorpay_payment_id,
 //     });
 //   } catch (error) {
 //     console.error('Payment verification error:', error);
@@ -497,6 +481,12 @@ app.post("/api/verify-payment", async (req, res) => {
       return res.status(400).json({ success: false, error: 'Payment verification failed' });
     }
 
+    // Get event details
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ success: false, error: 'Event not found' });
+    }
+
     // Update ticket quantities in database
     for (const ticket of tickets) {
       await Ticket.findByIdAndUpdate(
@@ -515,10 +505,22 @@ app.post("/api/verify-payment", async (req, res) => {
     });
     await paymentRecord.save();
 
+    // Create booking record
+    const booking = new Booking({
+      eventId: event._id,
+      eventName: event.title,
+      eventBannerImage: event.bannerImage,
+      eventDate: event.dateOfConduct,
+      holderName: user, // Use provided name or fallback to username
+      transactionId: razorpay_payment_id
+    });
+    await booking.save();
+
     res.json({ 
       success: true,
       message: 'Payment verified and tickets booked',
       paymentId: razorpay_payment_id,
+      bookingId: booking._id
     });
   } catch (error) {
     console.error('Payment verification error:', error);
@@ -965,6 +967,49 @@ app.post("/api/check-submission", async (req, res) => {
     });
   }
 });
+
+// app.get('/api/bookings/:username', async (req, res) => {
+//   try {
+//     const { username } = req.params;
+    
+//     // Validate the username parameter
+//     if (!username || typeof username !== 'string') {
+//       return res.status(400).json({ message: 'Invalid username provided' });
+//     }
+
+//     console.log("Touched");
+
+//     // Find all bookings for the given holderName
+//     const bookings = await Booking.find({ holderName: username })
+//       .sort({ createdAt: -1 }); // Sort by most recent first
+
+//     if (!bookings || bookings.length === 0) {
+//       return res.status(404).json({ message: 'No bookings found for this user' });
+//     }
+
+//     res.status(200).json(bookings);
+//   } catch (error) {
+//     console.error('Error fetching bookings:', error);
+//     res.status(500).json({ message: 'Server error while fetching bookings' });
+//   }
+// });
+
+app.get('/api/bookings', async (req, res) => {
+  try {
+    const { holderName } = req.query;
+    
+    if (!holderName) {
+      return res.status(400).json({ message: 'holderName is required' });
+    }
+
+    const bookings = await Booking.find({ holderName }).sort({ createdAt: -1 });
+    res.json(bookings);
+  } catch (error) {
+    console.error('Error fetching bookings:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 
 // Start the server
 app.listen(PORT, () =>

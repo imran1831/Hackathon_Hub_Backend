@@ -1,38 +1,37 @@
 const mongoose = require('mongoose');
+const { Schema } = mongoose;
 
-const BookingSchema = new mongoose.Schema({
-  user: {
+const bookingSchema = new Schema({
+  eventId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  event: {
-    type: mongoose.Schema.Types.ObjectId,
+    required: true,
     ref: 'Event',
-    required: true
   },
-  tickets: [{
-    ticket: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Ticket',
-      required: true
-    },
-    quantity: {
-      type: Number,
-      required: true,
-      min: 1
-    }
-  }],
-  paymentId: String,
-  amount: Number,
-  isFree: {
-    type: Boolean,
-    default: false
+  eventName: {
+    type: String,
+    required: true,
   },
-  createdAt: {
+  eventBannerImage: {
+    type: String,
+    required: false,
+  },
+  eventDate: {
     type: Date,
-    default: Date.now
-  }
+    required: true,
+  },
+  holderName: {
+    type: String,
+    required: true,
+  },
+  transactionId: {
+    type: String,
+    required: true,
+    unique: true,
+  },
+}, {
+  timestamps: true,
 });
 
-module.exports = mongoose.model('Booking', BookingSchema);
+const Booking = mongoose.model('Booking', bookingSchema);
+
+module.exports = Booking;
