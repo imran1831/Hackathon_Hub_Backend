@@ -7,7 +7,7 @@ const session = require('express-session');
 const Event = require("./models/Event");
 const Ticket = require("./models/Ticket");
 const Payment = require("./models/Payment");
-const Form = require('./models/Form'); 
+const Form = require('./models/Form');
 const Response = require('./models/Response');
 const Quantity = require("./models/Quantity");
 const Booking = require("./models/Booking");
@@ -19,8 +19,7 @@ const app = express();
 const PORT = 8080;
 
 // Connect to MongoDB
-mongoose
-  .connect("mongodb://127.0.0.1:27017/Hackly")
+mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch((err) => console.error("MongoDB Connection Error:", err));
 
@@ -61,10 +60,10 @@ passport.deserializeUser((user, done) => {
 
 // Google OAuth Strategy
 passport.use(new GoogleStrategy({
-    clientID: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:8080/auth/google/callback'
-  },
+  clientID: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  callbackURL: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:8080/auth/google/callback'
+},
   (accessToken, refreshToken, profile, done) => {
     const user = {
       id: profile.id,
@@ -94,7 +93,7 @@ app.get('/auth/google',
   passport.authenticate('google', { scope: ['profile', 'email'] })
 );
 
-app.get('/auth/google/callback', 
+app.get('/auth/google/callback',
   passport.authenticate('google', { failureRedirect: '/login' }),
   (req, res) => {
     res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth-success`);
@@ -110,17 +109,17 @@ app.get('/auth/logout', (req, res) => {
       console.error('Logout error:', err);
       return res.status(500).json({ error: 'Logout failed' });
     }
-    
+
     // Clear the session cookie
     req.session.destroy((err) => {
       if (err) {
         console.error('Session destruction error:', err);
         return res.status(500).json({ error: 'Session destruction failed' });
       }
-      
+
       // Clear the passport cookie
       res.clearCookie('connect.sid');
-      
+
       // Send success response
       res.json({ success: true });
     });
@@ -159,28 +158,28 @@ app.post('/api/verify-payment-status', async (req, res) => {
     const { eventId, username } = req.body;
 
     if (!eventId || !username) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Both eventId and username are required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Both eventId and username are required'
       });
     }
 
     // Find a payment document that contains both the eventId and username
-    const payment = await Payment.findOne({ 
-      eventId: eventId, 
-      username: username 
+    const payment = await Payment.findOne({
+      eventId: eventId,
+      username: username
     });
 
     if (!payment) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Payment not found for the given eventId and username combination' 
+      return res.status(404).json({
+        success: false,
+        message: 'Payment not found for the given eventId and username combination'
       });
     }
 
     // If found, return success with payment details
-    return res.status(200).json({ 
-      success: true, 
+    return res.status(200).json({
+      success: true,
       message: 'Payment verified successfully',
       payment: {
         eventId: payment.eventId,
@@ -192,9 +191,9 @@ app.post('/api/verify-payment-status', async (req, res) => {
 
   } catch (error) {
     console.error('Error verifying payment:', error);
-    return res.status(500).json({ 
-      success: false, 
-      message: 'Internal server error while verifying payment' 
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error while verifying payment'
     });
   }
 });
@@ -291,9 +290,9 @@ app.post("/api/tickets", ensureAuthenticated, async (req, res) => {
 
     await newTicket.save();
     console.log('Ticket created by:', req.user.email); // Log who created the ticket
-    res.status(201).json({ 
-      message: "Ticket created successfully!", 
-      ticket: newTicket 
+    res.status(201).json({
+      message: "Ticket created successfully!",
+      ticket: newTicket
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -369,9 +368,9 @@ app.get("/api/event-with-tickets/:eventId", async (req, res) => {
     if (!event) {
       return res.status(404).json({ error: "Event not found" });
     }
-    
+
     const tickets = await Ticket.find({ eventId });
-    
+
     const response = {
       event: {
         _id: event._id,
@@ -380,7 +379,7 @@ app.get("/api/event-with-tickets/:eventId", async (req, res) => {
       },
       tickets: tickets
     };
-    
+
     res.json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -390,7 +389,7 @@ app.get("/api/event-with-tickets/:eventId", async (req, res) => {
 app.post("/api/quantities", async (req, res) => {
   try {
     const { eventId, username, quantity } = req.body;
-    
+
     // Validate required fields
     if (!eventId || !username || quantity === undefined) {
       return res.status(400).json({ error: 'eventId, username, and quantity are required' });
@@ -398,7 +397,7 @@ app.post("/api/quantities", async (req, res) => {
 
     const quantityData = new Quantity({ eventId, username, quantity });
     const savedQuantity = await quantityData.save();
-    
+
     res.status(201).json(savedQuantity);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -426,12 +425,12 @@ app.post("/api/create-razorpay-order", async (req, res) => {
 // app.post("/api/verify-payment", async (req, res) => {
 //   try {
 //     const { razorpay_payment_id, razorpay_order_id, razorpay_signature, eventId, tickets, user, amount } = req.body;
-    
+
 //     // Verify payment signature
 //     const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
 //     hmac.update(razorpay_order_id + "|" + razorpay_payment_id);
 //     const generated_signature = hmac.digest('hex');
-    
+
 //     if (generated_signature !== razorpay_signature) {
 //       return res.status(400).json({ success: false, error: 'Payment verification failed' });
 //     }
@@ -471,12 +470,12 @@ app.post("/api/create-razorpay-order", async (req, res) => {
 app.post("/api/verify-payment", async (req, res) => {
   try {
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature, eventId, tickets, user, amount } = req.body;
-    
+
     // Verify payment signature
     const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
     hmac.update(razorpay_order_id + "|" + razorpay_payment_id);
     const generated_signature = hmac.digest('hex');
-    
+
     if (generated_signature !== razorpay_signature) {
       return res.status(400).json({ success: false, error: 'Payment verification failed' });
     }
@@ -516,7 +515,7 @@ app.post("/api/verify-payment", async (req, res) => {
     });
     await booking.save();
 
-    res.json({ 
+    res.json({
       success: true,
       message: 'Payment verified and tickets booked',
       paymentId: razorpay_payment_id,
@@ -524,7 +523,7 @@ app.post("/api/verify-payment", async (req, res) => {
     });
   } catch (error) {
     console.error('Payment verification error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: 'Failed to verify payment'
     });
@@ -536,23 +535,23 @@ app.post("/api/verify-payment", async (req, res) => {
 app.get("/api/payments/:eventId", async (req, res) => {
   try {
     const eventId = req.params.eventId;
-    
+
     // Find all payments with the given eventId
     const payments = await Payment.find({ eventId: eventId });
-    
+
     if (payments.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'No payments found for this event'
       });
     }
-    
+
     res.status(200).json({
       success: true,
       count: payments.length,
       data: payments
     });
-    
+
   } catch (err) {
     console.error(err);
     res.status(500).json({
@@ -604,7 +603,7 @@ app.put("/api/payments/:paymentId", async (req, res) => {
 app.post("/api/register-free", async (req, res) => {
   try {
     const { eventId, tickets } = req.body;
-    
+
     // Update ticket quantities for free registration
     for (const ticket of tickets) {
       await Ticket.findByIdAndUpdate(
@@ -614,13 +613,13 @@ app.post("/api/register-free", async (req, res) => {
       );
     }
 
-    res.json({ 
+    res.json({
       success: true,
       message: 'Registered for free event'
     });
   } catch (error) {
     console.error('Registration error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: 'Failed to register'
     });
@@ -632,7 +631,7 @@ app.post('/api/events/:eventId/forms', async (req, res) => {
   try {
     const { title, description, questions } = req.body;
     const { eventId } = req.params;
-    
+
     const form = new Form({
       title,
       description,
@@ -659,7 +658,7 @@ app.post('/api/events/:eventId/forms', async (req, res) => {
 app.get('/api/events/:eventId/forms', async (req, res) => {
   try {
     const forms = await Form.find({ eventId: req.params.eventId })
-                          .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 });
     res.json({
       success: true,
       count: forms.length,
@@ -678,15 +677,15 @@ app.get('/api/events/:eventId/forms', async (req, res) => {
 app.get('/api/forms/:formId', async (req, res) => {
   try {
     const form = await Form.findById(req.params.formId)
-                         .populate('eventId', 'name date');
-    
+      .populate('eventId', 'name date');
+
     if (!form) {
       return res.status(404).json({
         success: false,
         message: 'Form not found'
       });
     }
-    
+
     res.json({
       success: true,
       data: form
@@ -708,7 +707,7 @@ app.put('/api/events/:eventId/forms/:formId', async (req, res) => {
 
     // Verify the form belongs to the specified event
     const form = await Form.findOne({ _id: formId, eventId });
-    
+
     if (!form) {
       return res.status(404).json({
         success: false,
@@ -719,15 +718,15 @@ app.put('/api/events/:eventId/forms/:formId', async (req, res) => {
     // Update the form
     const updatedForm = await Form.findByIdAndUpdate(
       formId,
-      { 
-        title, 
-        description, 
+      {
+        title,
+        description,
         questions,
-        updatedAt: Date.now() 
+        updatedAt: Date.now()
       },
-      { 
-        new: true, 
-        runValidators: true 
+      {
+        new: true,
+        runValidators: true
       }
     );
 
@@ -738,7 +737,7 @@ app.put('/api/events/:eventId/forms/:formId', async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating form:', error);
-    
+
     // Handle validation errors specifically
     if (error.name === 'ValidationError') {
       return res.status(400).json({
@@ -760,14 +759,14 @@ app.put('/api/events/:eventId/forms/:formId', async (req, res) => {
 app.delete('/api/forms/:formId', async (req, res) => {
   try {
     const deletedForm = await Form.findByIdAndDelete(req.params.formId);
-    
+
     if (!deletedForm) {
       return res.status(404).json({
         success: false,
         message: 'Form not found'
       });
     }
-    
+
     res.json({
       success: true,
       message: 'Form deleted successfully'
@@ -781,7 +780,7 @@ app.delete('/api/forms/:formId', async (req, res) => {
   }
 });
 
-app.post('/api/responses',ensureAuthenticated, async (req, res) => {
+app.post('/api/responses', ensureAuthenticated, async (req, res) => {
   try {
     const { formId, eventId, answers } = req.body;
 
@@ -797,7 +796,7 @@ app.post('/api/responses',ensureAuthenticated, async (req, res) => {
     const newResponse = new Response({
       formId,
       eventId,
-      submittedBy: req.user?.email , // Using your default value
+      submittedBy: req.user?.email, // Using your default value
       answers,
       metadata: {
         ipAddress: req.ip,
@@ -831,7 +830,7 @@ app.post('/api/responses',ensureAuthenticated, async (req, res) => {
 app.get('/api/events/:eventId/responses', async (req, res) => {
   try {
     const { eventId } = req.params;
-    
+
     // Get responses with form details populated
     const responses = await Response.find({ eventId })
       .populate({
@@ -882,28 +881,36 @@ app.get('/api/events/:eventId/responses/stats', async (req, res) => {
       totalResponses: await Response.countDocuments({ eventId: objectId }),
       byDevice: await Response.aggregate([
         { $match: { eventId: objectId } },
-        { $group: { 
-          _id: "$metadata.deviceType", 
-          count: { $sum: 1 } 
-        }},
-        { $project: {
-          deviceType: "$_id",
-          count: 1,
-          _id: 0
-        }}
+        {
+          $group: {
+            _id: "$metadata.deviceType",
+            count: { $sum: 1 }
+          }
+        },
+        {
+          $project: {
+            deviceType: "$_id",
+            count: 1,
+            _id: 0
+          }
+        }
       ]),
       byDate: await Response.aggregate([
         { $match: { eventId: objectId } },
-        { $group: { 
-          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-          count: { $sum: 1 }
-        }},
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            count: { $sum: 1 }
+          }
+        },
         { $sort: { _id: 1 } },
-        { $project: {
-          date: "$_id",
-          count: 1,
-          _id: 0
-        }}
+        {
+          $project: {
+            date: "$_id",
+            count: 1,
+            _id: 0
+          }
+        }
       ])
     };
 
@@ -971,7 +978,7 @@ app.post("/api/check-submission", async (req, res) => {
 // app.get('/api/bookings/:username', async (req, res) => {
 //   try {
 //     const { username } = req.params;
-    
+
 //     // Validate the username parameter
 //     if (!username || typeof username !== 'string') {
 //       return res.status(400).json({ message: 'Invalid username provided' });
@@ -997,7 +1004,7 @@ app.post("/api/check-submission", async (req, res) => {
 app.get('/api/bookings', async (req, res) => {
   try {
     const { holderName } = req.query;
-    
+
     if (!holderName) {
       return res.status(400).json({ message: 'holderName is required' });
     }
