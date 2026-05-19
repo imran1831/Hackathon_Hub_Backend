@@ -1,3 +1,5 @@
+require('dns').setDefaultResultOrder('ipv4first');
+require('dotenv').config();
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -13,15 +15,20 @@ const Quantity = require("./models/Quantity");
 const Booking = require("./models/Booking");
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
-require('dotenv').config();
 
 const app = express();
 const PORT = 8080;
 
 // Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB Connected"))
-  .catch((err) => console.error("MongoDB Connection Error:", err));
+mongoose.connect(process.env.MONGO_URI, {
+  serverSelectionTimeoutMS: 5000
+})
+.then(() => {
+  console.log("MongoDB Connected");
+})
+.catch((err) => {
+  console.error("MongoDB Connection Error:", err);
+});
 
 // Middleware
 app.use(
