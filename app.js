@@ -17,7 +17,7 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 
 const app = express();
-const PORT = 8080;
+const PORT = process.env.PORT || 8080;
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI, {
