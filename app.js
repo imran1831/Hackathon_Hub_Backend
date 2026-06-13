@@ -17,7 +17,7 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI, {
@@ -1026,6 +1026,7 @@ app.get('/api/bookings', async (req, res) => {
 
 
 // Start the server
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () =>
   console.log(`Server running on http://localhost:${PORT}`)
 );
