@@ -23,12 +23,12 @@ const app = express();
 mongoose.connect(process.env.MONGO_URI, {
   serverSelectionTimeoutMS: 5000
 })
-.then(() => {
-  console.log("MongoDB Connected");
-})
-.catch((err) => {
-  console.error("MongoDB Connection Error:", err);
-});
+  .then(() => {
+    console.log("MongoDB Connected");
+  })
+  .catch((err) => {
+    console.error("MongoDB Connection Error:", err);
+  });
 
 // Middleware
 app.use(
@@ -42,13 +42,16 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 // Session configuration
+app.set('trust proxy', 1);
+
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 24 * 60 * 60 * 1000 // 1 day
+    secure: true,
+    sameSite: 'none',
+    maxAge: 24 * 60 * 60 * 1000
   }
 }));
 
@@ -69,7 +72,7 @@ passport.deserializeUser((user, done) => {
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:8080/auth/google/callback'
+  callbackURL: process.env.GOOGLE_CALLBACK_URL || 'https://hackathon-hub-backend.onrender.com/auth/google/callback'
 },
   (accessToken, refreshToken, profile, done) => {
     const user = {
